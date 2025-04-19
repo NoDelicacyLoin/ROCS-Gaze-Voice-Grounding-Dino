@@ -10,6 +10,28 @@ from models.GroundingDINO.groundingdino import GroundingDINO
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.util.nested_tensor import nested_tensor_from_tensor_list
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+# === 添加可视化函数 ===
+def visualize_prediction(image_tensor, boxes, phrases):
+    image_np = image_tensor.permute(1, 2, 0).cpu().numpy()
+
+    fig, ax = plt.subplots(1)
+    ax.imshow(image_np)
+
+    for box, phrase in zip(boxes, phrases):
+        x, y, w, h = box  # xywh normalized
+        x *= image_np.shape[1]
+        y *= image_np.shape[0]
+        w *= image_np.shape[1]
+        h *= image_np.shape[0]
+        rect = patches.Rectangle((x, y), w, h, linewidth=2, edgecolor='r', facecolor='none')
+        ax.add_patch(rect)
+        ax.text(x, y, phrase, color='white', fontsize=8, bbox=dict(facecolor='red', alpha=0.5))
+
+    plt.axis('off')
+    plt.show()
 
 # === 加载图像与热力图 ===
 def load_image_and_heatmap(image_path, heatmap_path):
@@ -50,11 +72,17 @@ def run_inference(model, image_tensor, heatmap_tensor, caption):
     outputs = model(samples, text_dict=text_dict, gaze_features=gaze_features)
 
     if "pred_boxes" in outputs:
-        print("预测框数量：", outputs["pred_boxes"].shape[1])
-    else:
-        print("模型输出：", outputs.keys())
+        pred_boxes = outputs["pred_boxes"][0].cpu()  # (N, 4)
+        logits = outputs["pred_logits"][0].cpu()
+        prob = logits.sigmoid()
 
-    return outputs
+        threshold = 0.5
+        keep = prob.max(dim=1).values > threshold
+        boxes = pred_boxes[keep]
+        phrases = [text_dict["caption"]] * len(boxes)  # 可根据模型类别输出替换为具体 category
+
+        visualize_prediction(image_tensor, boxes, phrases)
+
 
 
 # === 入口 ===
