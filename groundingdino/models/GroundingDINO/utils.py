@@ -266,3 +266,29 @@ class ContrastiveEmbed(nn.Module):
         new_res[..., : res.shape[-1]] = res
 
         return new_res
+
+from groundingdino.util.nested_tensor import nested_tensor_from_tensor_list
+
+def collate_fn(batch):
+    """
+    Custom collate function for DataLoader.
+    Handles:
+    - images -> NestedTensor
+    - targets with: caption, heatmap, cap_list, boxes, labels
+    """
+    samples, targets = list(zip(*batch))
+
+    # Convert images to NestedTensor
+    samples = nested_tensor_from_tensor_list(samples)
+
+    # targets 是一个 list，每个元素是一个 dict
+    batch_targets = []
+    for t in targets:
+        # heatmap (Tensor), caption (str), cap_list (list[str]), bbox, labels 等都可以包含
+        bt = {}
+        for k, v in t.items():
+            bt[k] = v
+        batch_targets.append(bt)
+
+    return samples, batch_targets
+
