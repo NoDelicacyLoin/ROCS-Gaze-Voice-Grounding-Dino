@@ -36,31 +36,35 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         super().__init__(img_folder, ann_file)
         self._transforms = transforms
 
-    def __getitem__(self, idx):
-        img, target = super().__getitem__(idx)  # target: list
+def __getitem__(self, idx):
+    img, target = super().__getitem__(idx)
 
-        # import ipdb; ipdb.set_trace()
+    w, h = img.size
+    boxes = [obj["bbox"] for obj in target]
+    boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+    boxes[:, 2:] += boxes[:, :2]
+    boxes[:, 0::2].clamp_(min=0, max=w)
+    boxes[:, 1::2].clamp_(min=0, max=h)
+    keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
+    boxes = boxes[keep]
 
-        w, h = img.size
-        boxes = [obj["bbox"] for obj in target]
-        boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
-        boxes[:, 2:] += boxes[:, :2]  # xywh -> xyxy
-        boxes[:, 0::2].clamp_(min=0, max=w)
-        boxes[:, 1::2].clamp_(min=0, max=h)
-        # filt invalid boxes/masks/keypoints
-        keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
-        boxes = boxes[keep]
+    target_new = {}
+    image_id = self.ids[idx]
+    target_new["image_id"] = image_id
+    target_new["boxes"] = boxes
+    target_new["orig_size"] = torch.as_tensor([int(h), int(w)])
 
-        target_new = {}
-        image_id = self.ids[idx]
-        target_new["image_id"] = image_id
-        target_new["boxes"] = boxes
-        target_new["orig_size"] = torch.as_tensor([int(h), int(w)])
+    # 加载 gaze heatmap
+    heatmap_path = os.path.join("path_to_heatmaps", self.coco.loadImgs(image_id)[0]["file_name"].replace(".jpg", "_heatmap.png"))
+    heatmap = Image.open(heatmap_path).convert("L")
+    heatmap_tensor = T.ToTensor()(heatmap)
+    target_new["heatmap"] = heatmap_tensor
 
-        if self._transforms is not None:
-            img, target = self._transforms(img, target_new)
+    if self._transforms is not None:
+        img, target_new = self._transforms(img, target_new)
 
-        return img, target
+    return img, target_new
+
 
 
 class PostProcessCocoGrounding(nn.Module):
@@ -177,13 +181,14 @@ def main(args):
     # run inference
     start = time.time()
     for i, (images, targets) in enumerate(data_loader):
-        # get images and captions
-        images = images.tensors.to(args.device)
-        bs = images.shape[0]
-        input_captions = [caption] * bs
-
-        # feed to the model
-        outputs = model(images, captions=input_captions)
+        # 获取 gaze 特征
+        gaze_features = [t["heatmap"].to(args.device) for t in targets]
+        
+        # 构建 text_dict
+        text_dict = {"caption": caption}
+        
+        # 调用 forward
+        outputs = model(images, text_dict=text_dict, gaze_features=gaze_features)
 
         orig_target_sizes = torch.stack(
             [t["orig_size"] for t in targets], dim=0).to(images.device)
